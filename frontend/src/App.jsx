@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { bestMove, emptyBoard, evaluate, nextPlayer } from "./game.js";
 import Board from "./components/Board.jsx";
@@ -13,6 +13,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [scores, setScores] = useState({ X: 0, O: 0, draws: 0 });
+  const aiInFlight = useRef(false);
 
   const status = useMemo(() => evaluate(board), [board]);
   const turn = useMemo(() => (status.isOver ? null : nextPlayer(board)), [board, status]);
@@ -25,37 +26,33 @@ export default function App() {
     });
   }, []);
 
-  // Trigger AI move when it's its turn.
+  // Trigger AI move when it's its turn. We guard with a ref (not the `busy`
+  // state) so that calling setBusy doesn't re-fire this effect and cancel the
+  // in-flight request.
   useEffect(() => {
-    if (mode !== "ai" || status.isOver || turn !== AI || busy) return;
-    let cancelled = false;
+    if (mode !== "ai" || status.isOver || turn !== AI || aiInFlight.current) return;
+    aiInFlight.current = true;
     setBusy(true);
     (async () => {
       try {
         const data = await api.aiMove(board, AI);
-        if (!cancelled) {
-          setBoard(data.board);
-          setError(null);
-        }
+        setBoard(data.board);
+        setError(null);
       } catch (err) {
         // Fallback to local minimax if backend is unreachable.
-        if (!cancelled) {
-          const idx = bestMove(board, AI);
-          if (idx >= 0) {
-            const next = board.slice();
-            next[idx] = AI;
-            setBoard(next);
-          }
-          setError(`Offline mode: ${err.message}`);
+        const idx = bestMove(board, AI);
+        if (idx >= 0) {
+          const next = board.slice();
+          next[idx] = AI;
+          setBoard(next);
         }
+        setError(`Offline mode: ${err.message}`);
       } finally {
-        if (!cancelled) setBusy(false);
+        aiInFlight.current = false;
+        setBusy(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [board, mode, status.isOver, turn, busy]);
+  }, [board, mode, status.isOver, turn]);
 
   // Record score whenever the game ends.
   useEffect(() => {
